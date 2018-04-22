@@ -9,9 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	//slog "log"
 	"github.com/mailru/easyjson"
-
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/css"
@@ -21,7 +20,8 @@ import (
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 
-	"github.com/chromedp/chromedp/client"
+	"github.com/milesich/chromedp/client"
+	"github.com/chromedp/cdproto/network"
 )
 
 // TargetHandler manages a Chrome Debugging Protocol target.
@@ -30,6 +30,13 @@ type TargetHandler struct {
 
 	// frames is the set of encountered frames.
 	frames map[cdp.FrameID]*cdp.Frame
+
+	// lsnr is the map of listeners, which maps from cdp.MethodType to channels.
+	lsnr map[cdproto.MethodType][]chan interface{}
+
+	// lsnrchs is the map of channels, which maps from channel to registered cdp.MethodType(s).
+	lsnrchs map[<-chan interface{}]map[cdproto.MethodType]bool
+	lsnrrw sync.RWMutex
 
 	// cur is the current top level frame.
 	cur *cdp.Frame
@@ -85,6 +92,8 @@ func (h *TargetHandler) Run(ctxt context.Context) error {
 	// reset
 	h.Lock()
 	h.frames = make(map[cdp.FrameID]*cdp.Frame)
+	h.lsnr = make(map[cdproto.MethodType][]chan interface{})
+	h.lsnrchs = make(map[<-chan interface{}]map[cdproto.MethodType]bool)
 	h.qcmd = make(chan *cdproto.Message)
 	h.qres = make(chan *cdproto.Message)
 	h.qevents = make(chan *cdproto.Message)
@@ -101,7 +110,7 @@ func (h *TargetHandler) Run(ctxt context.Context) error {
 	for _, a := range []Action{
 		log.Enable(),
 		runtime.Enable(),
-		//network.Enable(),
+		network.Enable(),
 		inspector.Enable(),
 		page.Enable(),
 		dom.Enable(),
@@ -233,6 +242,11 @@ func (h *TargetHandler) processEvent(ctxt context.Context, msg *cdproto.Message)
 		return err
 	}
 
+	propagate(h, msg.Method, ev)
+
+	//jsn, _ := msg.MarshalJSON()
+	//slog.Printf("%s %s", msg.Method, jsn)
+
 	switch e := ev.(type) {
 	case *inspector.EventDetached:
 		h.Lock()
@@ -262,6 +276,18 @@ func (h *TargetHandler) processEvent(ctxt context.Context, msg *cdproto.Message)
 	}
 
 	return nil
+}
+
+// propagate propagates event to the listeners
+func propagate(h *TargetHandler, method cdproto.MethodType, ev interface{}) {
+	h.lsnrrw.RLock()
+	defer h.lsnrrw.RUnlock()
+	//slog.Printf("%#v", method)
+	if lsnrs, ok := h.lsnr[method]; ok {
+		for _, l := range lsnrs {
+			l <- ev
+		}
+	}
 }
 
 // documentUpdated handles the document updated event, retrieving the document
@@ -654,4 +680,48 @@ func (h *TargetHandler) domEvent(ctxt context.Context, ev interface{}) {
 	defer f.Unlock()
 
 	op(n)
+}
+
+// Listen creates a listener for the specified event types.
+func (h *TargetHandler) Listen(eventTypes ...cdproto.MethodType) <-chan interface{} {
+	h.lsnrrw.Lock()
+	defer h.lsnrrw.Unlock()
+
+	ch := make(chan interface{}, 16)
+	for _, evtTyp := range eventTypes {
+		if chlist, ok := h.lsnr[evtTyp]; ok {
+			chlist = append(chlist, ch)
+			if _, etok := h.lsnrchs[ch][evtTyp]; !etok {
+				h.lsnrchs[ch][evtTyp] = true
+			}
+		} else {
+			h.lsnr[evtTyp] = []chan interface{}{ch}
+			h.lsnrchs[ch] = map[cdproto.MethodType]bool{evtTyp: true}
+		}
+	}
+	return ch
+}
+
+// Release releases a channel returned from Listen.
+func (h *TargetHandler) Release(ch <-chan interface{}) {
+	h.lsnrrw.Lock()
+	defer h.lsnrrw.Unlock()
+
+	lsnrchs := h.lsnrchs[ch]
+	for evtTyp := range lsnrchs {
+		chs := h.lsnr[evtTyp]
+		for i := 0; i < len(chs); i++ {
+			if ch == chs[i] {
+				chs[i] = nil
+				if i == len(chs)-1 {
+					chs = chs[:len(chs)-1]
+				} else {
+					chs = append(chs[:i], chs[i+1:]...)
+				}
+				h.lsnr[evtTyp] = chs
+				break
+			}
+		}
+	}
+	delete(h.lsnrchs, ch)
 }
