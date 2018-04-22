@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	//slog "log"
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
@@ -34,7 +34,7 @@ const (
 
 // TargetHandler manages a Chrome DevTools Protocol target.
 type TargetHandler struct {
-	conn  client.Transport
+	conn client.Transport
 
 	// frames is the set of encountered frames.
 	frames map[cdp.FrameID]*cdp.Frame
@@ -44,7 +44,7 @@ type TargetHandler struct {
 
 	// lsnrchs is the map of channels, which maps from channel to registered cdp.MethodType(s).
 	lsnrchs map[<-chan interface{}]map[cdproto.MethodType]bool
-	lsnrrw  sync.RWMutex
+	lsnrrw sync.RWMutex
 
 	// cur is the current top level frame.
 	cur *cdp.Frame
@@ -64,7 +64,8 @@ type TargetHandler struct {
 	pageWaitGroup, domWaitGroup *sync.WaitGroup
 
 	// last is the last sent message identifier.
-	last int64
+	last  int64
+	lastm sync.Mutex
 
 	// res is the id->result channel map.
 	res   map[int64]chan *cdproto.Message
@@ -243,7 +244,7 @@ func (h *TargetHandler) read(ctxt context.Context) (*cdproto.Message, error) {
 			// unmarshal
 			ev, err := cdproto.UnmarshalMessage(msg)
 			if err != nil {
-				h.errorf("unable to unmarshal message for screencast frame: %v", err)
+				h.errf("unable to unmarshal message for screencast frame: %v", err)
 				return
 			}
 
@@ -253,7 +254,7 @@ func (h *TargetHandler) read(ctxt context.Context) (*cdproto.Message, error) {
 
 			err = h.Execute(ctxt, page.CommandScreencastFrameAck, sap, nil)
 			if err != nil {
-				h.errorf("unable to send ScreencastFrameAck: %v", err)
+				h.errf("unable to send ScreencastFrameAck: %v", err)
 				return
 			}
 		}()
@@ -773,7 +774,7 @@ func (h *TargetHandler) SetScreencastPath(path string) {
 
 func (h *TargetHandler) saveScreencastFrame(frame *page.EventScreencastFrame) {
 	if h.screencastPath == "" {
-		h.errorf("empty screencast path")
+		h.errf("empty screencast path")
 		return
 	}
 
@@ -781,12 +782,12 @@ func (h *TargetHandler) saveScreencastFrame(frame *page.EventScreencastFrame) {
 
 	dec, err := base64.StdEncoding.DecodeString(frame.Data)
 	if err != nil {
-		h.errorf("Failed to decode ScreencastFrame %q: %v", name, err)
+		h.errf("Failed to decode ScreencastFrame %q: %v", name, err)
 		return
 	}
 
 	err = ioutil.WriteFile(name, dec, 0644)
 	if err != nil {
-		h.errorf("Failed to write ScreencastFrame to %q: %v", name, err)
+		h.errf("Failed to write ScreencastFrame to %q: %v", name, err)
 	}
 }
