@@ -15,6 +15,8 @@ import (
 	"syscall"
 
 	"github.com/milesich/chromedp/client"
+	"io"
+	"log"
 )
 
 const (
@@ -166,9 +168,26 @@ func (r *Runner) Start(ctxt context.Context) error {
 		}
 	}
 
+	if _, found := os.LookupEnv("DEBUG"); found {
+		go func(r io.ReadCloser, err error) {
+			if _, err := io.Copy(os.Stdout, r); err != nil {
+				log.Print(err)
+			}
+		}(r.cmd.StdoutPipe())
+
+		go func(r io.ReadCloser, err error) {
+			if _, err := io.Copy(os.Stderr, r); err != nil {
+				log.Print(err)
+			}
+		}(r.cmd.StderrPipe())
+
+		log.Printf("CMD: %s", r.cmd.Args)
+	}
+
 	// start process
 	err = r.cmd.Start()
 	if err != nil {
+		log.Printf("%#v", err)
 		return err
 	}
 

@@ -80,7 +80,10 @@ func ForceKill(m map[string]interface{}) error {
 			c.SysProcAttr = new(syscall.SysProcAttr)
 		}
 
-		c.SysProcAttr.Pdeathsig = syscall.SIGKILL
+		// Only set Pdeathsig if not running in AWS Lambda
+		if _, found := os.LookupEnv("LAMBDA_TASK_ROOT"); !found {
+			c.SysProcAttr.Pdeathsig = syscall.SIGKILL
+		}
 
 		return nil
 	})(m)

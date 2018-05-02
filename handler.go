@@ -9,8 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	//slog "log"
-	"github.com/mailru/easyjson"
+
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/css"
@@ -19,9 +18,10 @@ import (
 	"github.com/chromedp/cdproto/log"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/mailru/easyjson"
 
-	"github.com/milesich/chromedp/client"
 	"github.com/chromedp/cdproto/network"
+	"github.com/milesich/chromedp/client"
 )
 
 // TargetHandler manages a Chrome Debugging Protocol target.
@@ -36,7 +36,7 @@ type TargetHandler struct {
 
 	// lsnrchs is the map of channels, which maps from channel to registered cdp.MethodType(s).
 	lsnrchs map[<-chan interface{}]map[cdproto.MethodType]bool
-	lsnrrw sync.RWMutex
+	lsnrrw  sync.RWMutex
 
 	// cur is the current top level frame.
 	cur *cdp.Frame
@@ -570,6 +570,8 @@ func (h *TargetHandler) pageEvent(ctxt context.Context, ev interface{}) {
 	case *page.EventFrameResized:
 		return
 	case *page.EventLifecycleEvent:
+		return
+	case *page.EventNavigatedWithinDocument:
 		return
 
 	default:
