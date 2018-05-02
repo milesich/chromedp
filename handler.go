@@ -44,7 +44,7 @@ type TargetHandler struct {
 
 	// lsnrchs is the map of channels, which maps from channel to registered cdp.MethodType(s).
 	lsnrchs map[<-chan interface{}]map[cdproto.MethodType]bool
-	lsnrrw sync.RWMutex
+	lsnrrw  sync.RWMutex
 
 	// cur is the current top level frame.
 	cur *cdp.Frame
