@@ -64,8 +64,7 @@ type TargetHandler struct {
 	pageWaitGroup, domWaitGroup *sync.WaitGroup
 
 	// last is the last sent message identifier.
-	last  int64
-	lastm sync.Mutex
+	last int64
 
 	// res is the id->result channel map.
 	res   map[int64]chan *cdproto.Message
