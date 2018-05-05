@@ -299,3 +299,10 @@ func isCouldNotComputeBoxModelError(err error) bool {
 	e, ok := err.(*cdproto.Error)
 	return ok && e.Code == -32000 && e.Message == "Could not compute box model."
 }
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

@@ -25,7 +25,7 @@ const (
 	DefaultNewTargetTimeout = 3 * time.Second
 
 	// DefaultCheckDuration is the default time to sleep between a check.
-	DefaultCheckDuration = 50 * time.Millisecond
+	DefaultCheckDuration = 250 * time.Millisecond
 
 	// DefaultPoolStartPort is the default start port number.
 	DefaultPoolStartPort = 9000

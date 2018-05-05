@@ -12,7 +12,6 @@ import (
 
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/css"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/inspector"
 	"github.com/chromedp/cdproto/log"
@@ -20,13 +19,22 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/mailru/easyjson"
 
+	"github.com/chromedp/cdproto/css"
 	"github.com/chromedp/cdproto/network"
 	"github.com/milesich/chromedp/client"
+	"sync/atomic"
+	"encoding/base64"
+	"io/ioutil"
+)
+
+const (
+	// maximum length of log line
+	maxLogLineLen = 255
 )
 
 // TargetHandler manages a Chrome Debugging Protocol target.
 type TargetHandler struct {
-	conn client.Transport
+	conn  client.Transport
 
 	// frames is the set of encountered frames.
 	frames map[cdp.FrameID]*cdp.Frame
@@ -56,8 +64,7 @@ type TargetHandler struct {
 	pageWaitGroup, domWaitGroup *sync.WaitGroup
 
 	// last is the last sent message identifier.
-	last  int64
-	lastm sync.Mutex
+	last int64
 
 	// res is the id->result channel map.
 	res   map[int64]chan *cdproto.Message
@@ -65,6 +72,9 @@ type TargetHandler struct {
 
 	// logging funcs
 	logf, debugf, errorf LogFunc
+
+	// where to store screencast frames
+	screencastPath string
 
 	sync.RWMutex
 }
@@ -157,7 +167,7 @@ func (h *TargetHandler) run(ctxt context.Context) {
 		for {
 			select {
 			default:
-				msg, err := h.read()
+				msg, err := h.read(ctxt)
 				if err != nil {
 					return
 				}
@@ -211,20 +221,42 @@ func (h *TargetHandler) run(ctxt context.Context) {
 }
 
 // read reads a message from the client connection.
-func (h *TargetHandler) read() (*cdproto.Message, error) {
+func (h *TargetHandler) read(ctxt context.Context) (*cdproto.Message, error) {
 	// read
 	buf, err := h.conn.Read()
 	if err != nil {
 		return nil, err
 	}
 
-	h.debugf("-> %s", string(buf))
+	h.debugf("-> %s", buf[:min(maxLogLineLen, len(buf))])
 
 	// unmarshal
 	msg := new(cdproto.Message)
 	err = json.Unmarshal(buf, msg)
 	if err != nil {
 		return nil, err
+	}
+
+	// automatically send ScreencastFrameAck for every ScreencastFrame
+	if msg.Method == cdproto.EventPageScreencastFrame {
+		go func() {
+			// unmarshal
+			ev, err := cdproto.UnmarshalMessage(msg)
+			if err != nil {
+				h.errorf("unable to unmarshal message for screencast frame: %v", err)
+				return
+			}
+
+			sap := &page.ScreencastFrameAckParams{
+				SessionID: ev.(*page.EventScreencastFrame).SessionID,
+			}
+
+			err = h.Execute(ctxt, page.CommandScreencastFrameAck, sap, nil)
+			if err != nil {
+				h.errorf("unable to send ScreencastFrameAck: %v", err)
+				return
+			}
+		}()
 	}
 
 	return msg, nil
@@ -282,7 +314,7 @@ func (h *TargetHandler) processEvent(ctxt context.Context, msg *cdproto.Message)
 func propagate(h *TargetHandler, method cdproto.MethodType, ev interface{}) {
 	h.lsnrrw.RLock()
 	defer h.lsnrrw.RUnlock()
-	//slog.Printf("%#v", method)
+
 	if lsnrs, ok := h.lsnr[method]; ok {
 		for _, l := range lsnrs {
 			l <- ev
@@ -341,7 +373,7 @@ func (h *TargetHandler) processCommand(cmd *cdproto.Message) error {
 		return err
 	}
 
-	h.debugf("<- %s", string(buf))
+	h.debugf("<- %s", buf[:min(maxLogLineLen, len(buf))])
 
 	return h.conn.Write(buf)
 }
@@ -410,10 +442,7 @@ func (h *TargetHandler) Execute(ctxt context.Context, methodType string, params 
 
 // next returns the next message id.
 func (h *TargetHandler) next() int64 {
-	h.lastm.Lock()
-	defer h.lastm.Unlock()
-	h.last++
-	return h.last
+	return atomic.AddInt64(&h.last, 1)
 }
 
 // GetRoot returns the current top level frame's root document node.
@@ -562,6 +591,10 @@ func (h *TargetHandler) pageEvent(ctxt context.Context, ev interface{}) {
 	case *page.EventFrameClearedScheduledNavigation:
 		id, op = e.FrameID, frameClearedScheduledNavigation
 
+	case *page.EventScreencastFrame:
+		h.saveScreencastFrame(ev.(*page.EventScreencastFrame))
+		return
+
 		// ignored events
 	case *page.EventDomContentEventFired:
 		return
@@ -572,6 +605,8 @@ func (h *TargetHandler) pageEvent(ctxt context.Context, ev interface{}) {
 	case *page.EventLifecycleEvent:
 		return
 	case *page.EventNavigatedWithinDocument:
+		return
+	case *page.EventScreencastVisibilityChanged:
 		return
 
 	default:
@@ -726,4 +761,32 @@ func (h *TargetHandler) Release(ch <-chan interface{}) {
 		}
 	}
 	delete(h.lsnrchs, ch)
+}
+
+// Set path to screencast frames storage
+func (h *TargetHandler) SetScreencastPath(path string) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.screencastPath = path
+}
+
+func (h *TargetHandler) saveScreencastFrame(frame *page.EventScreencastFrame) {
+	if h.screencastPath == "" {
+		h.errorf("empty screencast path")
+		return
+	}
+
+	name := fmt.Sprintf("%s/screencast-%d.jpg", h.screencastPath, frame.Metadata.Timestamp.Time().UnixNano())
+
+	dec, err := base64.StdEncoding.DecodeString(frame.Data)
+	if err != nil {
+		h.errorf("Failed to decode ScreencastFrame %q: %v", name, err)
+		return
+	}
+
+	err = ioutil.WriteFile(name, dec, 0644)
+	if err != nil {
+		h.errorf("Failed to write ScreencastFrame to %q: %v", name, err)
+	}
 }
