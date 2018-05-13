@@ -12,7 +12,7 @@ notice. There are likely extremely bad bugs lurking in this code. **CAVEAT USER*
 Install in the usual way:
 
 ```sh
-go get -u github.com/chromedp/chromedp
+go get -u github.com/milesich/chromedp
 ```
 
 ## Using
