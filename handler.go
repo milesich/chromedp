@@ -32,7 +32,7 @@ const (
 	maxLogLineLen = 255
 )
 
-// TargetHandler manages a Chrome Debugging Protocol target.
+// TargetHandler manages a Chrome DevTools Protocol target.
 type TargetHandler struct {
 	conn  client.Transport
 
